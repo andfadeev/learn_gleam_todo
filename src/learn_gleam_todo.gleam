@@ -3,6 +3,7 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
 import gleam/json
+import gleam/list
 import gleam/option
 import gleam/result
 import gleam/time/calendar
@@ -53,12 +54,50 @@ fn middleware(req: Request, handler: fn(Request) -> Response) -> Response {
   handler(req)
 }
 
-fn delete_todo_handler(_ctx: Context, _id: String) {
-  wisp.no_content()
+fn delete_todo_handler(ctx: Context, id: String) {
+  case uuid.from_string(id) {
+    Ok(id) -> {
+      case sql.delete_todo_item(ctx.db, id) {
+        Ok(_) -> wisp.no_content()
+        Error(_) -> wisp.internal_server_error()
+      }
+    }
+    Error(_) -> wisp.bad_request("Invalid id")
+  }
 }
 
-fn get_todo_handler(_ctx: Context, id: String) {
-  wisp.string_body(wisp.ok(), "Todo item " <> id)
+fn get_todo_handler(ctx: Context, id: String) {
+  case uuid.from_string(id) {
+    Ok(id) -> {
+      case sql.find_todo_item(ctx.db, id) {
+        Ok(todo_item) -> {
+          case todo_item.rows {
+            [] -> wisp.not_found()
+            [row] -> {
+              let todo_item =
+                TodoItem(
+                  row.id,
+                  row.title,
+                  row.description,
+                  row.status,
+                  row.created_at,
+                  row.updated_at,
+                )
+
+              todo_item_to_json(todo_item)
+              |> json.to_string
+              |> wisp.json_response(200)
+            }
+            _ -> {
+              wisp.internal_server_error()
+            }
+          }
+        }
+        Error(_) -> wisp.internal_server_error()
+      }
+    }
+    Error(_) -> wisp.bad_request("Invalid id")
+  }
 }
 
 fn todo_handler(req: Request, ctx: Context, id: String) -> Response {
@@ -72,40 +111,28 @@ fn todo_handler(req: Request, ctx: Context, id: String) -> Response {
 fn get_todos_hander(ctx: Context) {
   case sql.find_todo_items(ctx.db) {
     Ok(todo_items) -> {
-      echo "Got todo items"
-      echo todo_items
-      echo "OK"
+      todo_items.rows
+      |> list.map(fn(row: sql.FindTodoItemsRow) {
+        TodoItem(
+          row.id,
+          row.title,
+          row.description,
+          row.status,
+          row.created_at,
+          row.updated_at,
+        )
+      })
+      |> json.array(todo_item_to_json)
+      |> json.to_string
+      |> wisp.json_response(200)
     }
     Error(_) -> {
-      echo "Failed to get todo items"
+      wisp.internal_server_error()
     }
   }
-
-  let todo_items = [
-    TodoItem(
-      uuid.v4(),
-      "todoitem1",
-      option.Some("description 1"),
-      "pending",
-      timestamp.from_unix_seconds(1_766_689_000),
-      timestamp.from_unix_seconds(1_766_689_000),
-    ),
-    TodoItem(
-      uuid.v4(),
-      "todoitem2",
-      option.None,
-      "completed",
-      timestamp.from_unix_seconds(1_766_689_000),
-      timestamp.from_unix_seconds(1_766_689_000),
-    ),
-  ]
-
-  json.array(todo_items, todo_item_to_json)
-  |> json.to_string
-  |> wisp.json_response(200)
 }
 
-fn post_todos_handler(req: Request, _ctx: Context) {
+fn post_todos_handler(req: Request, ctx: Context) {
   use json <- wisp.require_json(req)
 
   let result = {
@@ -116,21 +143,30 @@ fn post_todos_handler(req: Request, _ctx: Context) {
     }
     use #(title, description) <- result.try(decode.run(json, decoder))
 
-    let todo_item =
-      TodoItem(
-        uuid.v4(),
-        title,
-        option.Some(description),
-        "pending",
-        timestamp.from_unix_seconds(1_766_689_000),
-        timestamp.from_unix_seconds(1_766_689_000),
-      )
-
-    Ok(
-      todo_item_to_json(todo_item)
-      |> json.to_string
-      |> wisp.json_response(200),
-    )
+    case sql.insert_todo_item(ctx.db, title, description, "pending") {
+      Ok(r) -> {
+        case r.rows {
+          [row] -> {
+            TodoItem(
+              row.id,
+              row.title,
+              row.description,
+              row.status,
+              row.created_at,
+              row.updated_at,
+            )
+            |> todo_item_to_json()
+            |> json.to_string
+            |> wisp.json_response(200)
+            |> Ok()
+          }
+          _ -> Ok(wisp.internal_server_error())
+        }
+      }
+      Error(_) -> {
+        Ok(wisp.internal_server_error())
+      }
+    }
   }
 
   case result {
