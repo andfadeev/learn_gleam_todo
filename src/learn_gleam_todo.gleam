@@ -14,6 +14,10 @@ import wisp.{type Request, type Response}
 import wisp/wisp_mist
 import youid/uuid
 
+pub type Context {
+  Context(db: pog.Connection)
+}
+
 type TodoItem {
   TodoItem(
     id: uuid.Uuid,
@@ -49,23 +53,34 @@ fn middleware(req: Request, handler: fn(Request) -> Response) -> Response {
   handler(req)
 }
 
-fn delete_todo_handler(_id: String) {
+fn delete_todo_handler(_ctx: Context, _id: String) {
   wisp.no_content()
 }
 
-fn get_todo_handler(id: String) {
+fn get_todo_handler(_ctx: Context, id: String) {
   wisp.string_body(wisp.ok(), "Todo item " <> id)
 }
 
-fn todo_handler(req: Request, id: String) -> Response {
+fn todo_handler(req: Request, ctx: Context, id: String) -> Response {
   case req.method {
-    http.Get -> get_todo_handler(id)
-    http.Delete -> delete_todo_handler(id)
+    http.Get -> get_todo_handler(ctx, id)
+    http.Delete -> delete_todo_handler(ctx, id)
     _ -> wisp.method_not_allowed([http.Get, http.Delete])
   }
 }
 
-fn get_todos_hander() {
+fn get_todos_hander(ctx: Context) {
+  case sql.find_todo_items(ctx.db) {
+    Ok(todo_items) -> {
+      echo "Got todo items"
+      echo todo_items
+      echo "OK"
+    }
+    Error(_) -> {
+      echo "Failed to get todo items"
+    }
+  }
+
   let todo_items = [
     TodoItem(
       uuid.v4(),
@@ -90,7 +105,7 @@ fn get_todos_hander() {
   |> wisp.json_response(200)
 }
 
-fn post_todos_handler(req: Request) {
+fn post_todos_handler(req: Request, _ctx: Context) {
   use json <- wisp.require_json(req)
 
   let result = {
@@ -124,26 +139,29 @@ fn post_todos_handler(req: Request) {
   }
 }
 
-fn todos_handler(req: Request) -> Response {
+fn todos_handler(req: Request, ctx: Context) -> Response {
   case req.method {
-    http.Get -> get_todos_hander()
-    http.Post -> post_todos_handler(req)
+    http.Get -> get_todos_hander(ctx)
+    http.Post -> post_todos_handler(req, ctx)
     _ -> wisp.method_not_allowed([http.Get, http.Post])
   }
 }
 
-fn handler(req: Request) -> Response {
+fn handler(req: Request, ctx: Context) -> Response {
   use req <- middleware(req)
 
   case wisp.path_segments(req) {
-    ["todos"] -> todos_handler(req)
-    ["todos", id] -> todo_handler(req, id)
+    ["todos"] -> todos_handler(req, ctx)
+    ["todos", id] -> todo_handler(req, ctx, id)
     _ -> wisp.not_found()
   }
 }
 
 pub fn main() -> Nil {
   wisp.configure_logger()
+
+  let secret =
+    result.unwrap(envoy.get("SECRET_KEY_BASE"), "wisp_secret_fallback")
 
   let db_pool_name = process.new_name("db_pool")
   let assert Ok(database_url) = envoy.get("DATABASE_URL")
@@ -155,19 +173,8 @@ pub fn main() -> Nil {
 
   let con = pog.named_connection(db_pool_name)
 
-  case sql.find_todo_items(con) {
-    Ok(todo_items) -> {
-      echo "Got todo items"
-      echo todo_items
-      echo "OK"
-    }
-    Error(_) -> {
-      echo "Failed to get todo items"
-    }
-  }
-
-  let secret =
-    result.unwrap(envoy.get("SECRET_KEY_BASE"), "wisp_secret_fallback")
+  let context = Context(con)
+  let handler = handler(_, context)
 
   let assert Ok(_) =
     wisp_mist.handler(handler, secret)
