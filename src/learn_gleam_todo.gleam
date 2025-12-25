@@ -1,5 +1,6 @@
 import envoy
 import gleam/erlang/process
+import gleam/http
 import gleam/result
 import mist
 import wisp.{type Request, type Response}
@@ -14,11 +15,46 @@ fn middleware(req: Request, handler: fn(Request) -> Response) -> Response {
   handler(req)
 }
 
-fn handler(req: Request) -> Response {
-  use _ <- middleware(req)
+fn delete_todo_handler(_id: String) {
+  wisp.no_content()
+}
 
-  wisp.ok()
-  |> wisp.string_body("Hellow from Wisp & Gleam")
+fn get_todo_handler(id: String) {
+  wisp.string_body(wisp.ok(), "Todo item " <> id)
+}
+
+fn todo_handler(req: Request, id: String) -> Response {
+  case req.method {
+    http.Get -> get_todo_handler(id)
+    http.Delete -> delete_todo_handler(id)
+    _ -> wisp.method_not_allowed([http.Get, http.Delete])
+  }
+}
+
+fn get_todos_hander() {
+  wisp.string_body(wisp.ok(), "Todo items")
+}
+
+fn post_todos_hander() {
+  wisp.created()
+}
+
+fn todos_handler(req: Request) -> Response {
+  case req.method {
+    http.Get -> get_todos_hander()
+    http.Post -> post_todos_hander()
+    _ -> wisp.method_not_allowed([http.Get, http.Post])
+  }
+}
+
+fn handler(req: Request) -> Response {
+  use req <- middleware(req)
+
+  case wisp.path_segments(req) {
+    ["todos"] -> todos_handler(req)
+    ["todos", id] -> todo_handler(req, id)
+    _ -> wisp.not_found()
+  }
 }
 
 pub fn main() -> Nil {
