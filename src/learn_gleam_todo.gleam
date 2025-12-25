@@ -1,4 +1,5 @@
 import envoy
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
 import gleam/json
@@ -87,14 +88,44 @@ fn get_todos_hander() {
   |> wisp.json_response(200)
 }
 
-fn post_todos_hander() {
-  wisp.created()
+fn post_todos_handler(req: Request) {
+  use json <- wisp.require_json(req)
+
+  let result = {
+    let decoder = {
+      use title <- decode.field("title", decode.string)
+      use description <- decode.optional_field("description", "", decode.string)
+      decode.success(#(title, description))
+    }
+    use #(title, description) <- result.try(decode.run(json, decoder))
+
+    let todo_item =
+      TodoItem(
+        uuid.v4(),
+        title,
+        option.Some(description),
+        "pending",
+        timestamp.from_unix_seconds(1_766_689_000),
+        timestamp.from_unix_seconds(1_766_689_000),
+      )
+
+    Ok(
+      todo_item_to_json(todo_item)
+      |> json.to_string
+      |> wisp.json_response(200),
+    )
+  }
+
+  case result {
+    Ok(resp) -> resp
+    Error(_) -> wisp.unprocessable_content()
+  }
 }
 
 fn todos_handler(req: Request) -> Response {
   case req.method {
     http.Get -> get_todos_hander()
-    http.Post -> post_todos_hander()
+    http.Post -> post_todos_handler(req)
     _ -> wisp.method_not_allowed([http.Get, http.Post])
   }
 }
