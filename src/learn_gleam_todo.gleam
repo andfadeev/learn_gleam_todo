@@ -2,12 +2,16 @@ import envoy
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option
 import gleam/result
 import gleam/time/calendar
 import gleam/time/timestamp
+import lustre/attribute as attr
+import lustre/element
+import lustre/element/html
 import mist
 import pog
 import sql
@@ -183,10 +187,59 @@ fn todos_handler(req: Request, ctx: Context) -> Response {
   }
 }
 
+fn todo_item_component(item: TodoItem) {
+  html.div([attr.class("rounded border mt-4 p-4")], [
+    html.h2([], [html.text(item.title)]),
+    html.p([], [html.text(option.unwrap(item.description, ""))]),
+  ])
+}
+
+fn get_index_handler(req: Request, context: Context) -> Response {
+  use <- wisp.require_method(req, http.Get)
+
+  case sql.find_todo_items(context.db) {
+    Ok(todo_items) -> {
+      let todo_items_html =
+        todo_items.rows
+        |> list.map(fn(i: sql.FindTodoItemsRow) {
+          TodoItem(
+            i.id,
+            i.title,
+            i.description,
+            i.status,
+            i.created_at,
+            i.updated_at,
+          )
+        })
+        |> list.map(todo_item_component)
+      let html =
+        html.html([], [
+          html.head([], [
+            html.title([], "Gleam todo items"),
+            html.script([attr.src("https://cdn.tailwindcss.com")], ""),
+          ]),
+          html.body([attr.class("max-w-2xl mx-auto")], [
+            html.h1([attr.class("text-red-800 font-bold")], [
+              html.text("Todo: " <> int.to_string(list.length(todo_items_html))),
+            ]),
+            html.div([attr.class("text-blue-800")], todo_items_html),
+          ]),
+        ])
+
+      wisp.ok()
+      |> wisp.html_body(element.to_document_string(html))
+    }
+    Error(_) -> {
+      wisp.internal_server_error()
+    }
+  }
+}
+
 fn handler(req: Request, ctx: Context) -> Response {
   use req <- middleware(req)
 
   case wisp.path_segments(req) {
+    [] -> get_index_handler(req, ctx)
     ["todos"] -> todos_handler(req, ctx)
     ["todos", id] -> todo_handler(req, ctx, id)
     _ -> wisp.not_found()
