@@ -235,11 +235,32 @@ fn get_index_handler(req: Request, context: Context) -> Response {
   }
 }
 
-fn handler(req: Request, ctx: Context) -> Response {
+pub fn handler2(req: Request) -> Response {
+  use req <- middleware(req)
+
+  case wisp.path_segments(req) {
+    ["hello"] -> {
+      let body =
+        json.object([#("message", json.string("Hello, world!"))])
+        |> json.to_string()
+      wisp.json_response(body, 200)
+    }
+
+    _ -> wisp.not_found()
+  }
+}
+
+pub fn handler(req: Request, ctx: Context) -> Response {
   use req <- middleware(req)
 
   case wisp.path_segments(req) {
     [] -> get_index_handler(req, ctx)
+    ["hello"] -> {
+      let body =
+        json.object([#("message", json.string("Hello, world!"))])
+        |> json.to_string()
+      wisp.json_response(body, 200)
+    }
     ["todos"] -> todos_handler(req, ctx)
     ["todos", id] -> todo_handler(req, ctx, id)
     _ -> wisp.not_found()
